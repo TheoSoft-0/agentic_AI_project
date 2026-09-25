@@ -1,0 +1,10 @@
+./agentic-ai/browser_profile/
+./agentic-ai/browser_profile/
+./agentic-ai/__pycache__/
+./agentic-ai/ipynb_checkpoints/
+./agentic-ai/DS_Store
+.browser_profile/
+__pycache__/
+.ipynb_checkpoints/
+.DS_Store
+./agentic-ai/src
