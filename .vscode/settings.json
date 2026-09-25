@@ -1,4 +1,3 @@
 {
-    "python-envs.defaultEnvManager": "ms-python.python:system",
-    "python-envs.pythonProjects": []
+    "python.defaultInterpreterPath": "/opt/anaconda3/envs/agentic-ai/bin/python"
 }
