@@ -4,6 +4,7 @@ import re
 
 from playwright.async_api import (
     BrowserContext,
+    Locator,
     Page,
     Playwright,
 )
@@ -114,6 +115,94 @@ async def ensure_logged_in(
 CONVERSATION_URL_PATTERN = re.compile( r"^https://mail\.proton\.me/u/\d+/trash/[^/?]+")
 
 
+async def star_conversation( page: Page, index: int,) -> None:
+    """Mark a Trash conversation as starred."""
+
+    if not await is_trash_page(page):
+        raise RuntimeError( "The current Proton page is not Trash." )
+
+    rows = page.locator( "div.item-container--row" )
+
+    row_count = await rows.count()
+
+    if row_count == 0:
+        raise RuntimeError( "No Trash conversations are visible." )
+
+    if index < 0 or index >= row_count:
+        raise IndexError(
+            f"Conversation index {index} is invalid. "
+            f"Valid indexes: 0-{row_count - 1}."
+        )
+
+    row = rows.nth(index)
+
+    if not await row.is_visible():
+        raise RuntimeError( f"Conversation {index} is not visible." )
+
+    already_starred = ( await is_conversation_starred(row) )
+
+    if already_starred:
+        print( f"Conversation {index} is already starred." )
+        return
+
+    star_button = row.locator( "button.starbutton" )
+
+    await star_button.click()
+
+    await page.wait_for_timeout(300)
+
+    starred_after_click = ( await is_conversation_starred(row) )
+
+    if not starred_after_click:
+        raise RuntimeError(
+            f"Conversation {index} was clicked, "
+            "but verification shows it is not starred."
+        )
+
+    print( f"Conversation {index} is now starred." )
+
+async def is_conversation_starred( row: Locator, ) -> bool:
+    """Return whether a conversation is currently starred."""
+    star_button = row.locator( "button.starbutton" )
+
+    if await star_button.count() != 1:
+        raise RuntimeError(
+            "Conversation does not have exactly "
+            "one star button."
+        )
+
+    button = star_button.first
+
+    aria_pressed = await button.get_attribute( "aria-pressed" )
+
+    if aria_pressed is not None:
+        if aria_pressed == "true":
+            return True
+
+        if aria_pressed == "false":
+            return False
+
+    aria_label   = await button.get_attribute( "aria-label" )
+    title        = await button.get_attribute( "title" )
+    text         = ( await button.inner_text() ).strip()
+    class_name   = await button.get_attribute( "class" ) or ""
+    state_values = [  aria_label or "", title or "", text, class_name, ]
+    combined     = " ".join( state_values ).lower()
+
+    if ( "unstar" in combined or "starred" in combined ):
+        return True
+
+    if ( "star conversation" in combined or "not starred" in combined ):
+        return False
+
+    raise RuntimeError(
+        "Could not determine the star state. "
+        f"aria-label={aria_label!r}, "
+        f"title={title!r}, "
+        f"text={text!r}, "
+        f"class={class_name!r}"
+    )
+
 async def is_trash_conversation_page(
     page: Page,
 ) -> bool:
@@ -194,58 +283,68 @@ async def close_proton_mail(
     await playwright.stop()
 
     _ACTIVE_PROTON_SESSION = None
-    
-async def open_trash_conversation(
-    page: Page,
-    index: int,
-) -> EmailContent:
-    """Open a Trash conversation and return its visible content."""
+
+
+async def return_to_trash( page: Page, ) -> None:
+    """Return from an opened conversation to Trash."""
+
+    if await is_trash_page(page):
+        print("Already on Trash.")
+        return
+
+    if not await is_trash_conversation_page(page):
+        raise RuntimeError(
+            "The current Proton page is neither "
+            "Trash nor a Trash conversation."
+        )
+
+    await ensure_navigation_expanded(page)
+
+    trash_link = page.locator( 'a[href$="/trash"]' )
+
+    await trash_link.wait_for(  state="visible" )
+
+    await trash_link.click()
+
+    await page.wait_for_url( TRASH_URL_PATTERN )
+
+    print("Returned to Trash.")
+
+async def open_trash_conversation( page: Page, index: int,) -> EmailContent:
+    """Open a specific Trash conversation."""
 
     if await is_trash_conversation_page(page):
-        print("conversation already open")
-
-        raw_text = await page.locator(
-            "body"
-        ).inner_text()
-
-        return EmailContent(
-            conversation_index=index,
-            raw_text=raw_text,
-        )
+        print("Conversation already open.")
+        await return_to_trash(page)
 
     if not await is_trash_page(page):
-        raise RuntimeError(
-            "The current Proton page is not Trash."
-        )
+        raise RuntimeError( "The current Proton page is not Trash." )
 
-    rows = page.locator(
-        "div.item-container--row"
-    )
+    rows = page.locator( "div.item-container--row")
 
-    if index < 0 or index >= await rows.count():
+    row_count = await rows.count()
+
+    if index < 0 or index >= row_count:
         raise IndexError(
-            f"Conversation index {index} does not exist."
+            f"Conversation index {index} is invalid. "
+            f"Available rows: 0-{row_count - 1}."
         )
 
     row = rows.nth(index)
 
     if not await row.is_visible():
-        raise RuntimeError(
-            f"Conversation {index} is not visible."
-        )
+        raise RuntimeError(f"Conversation {index} is not visible.")
 
     await row.click()
 
     await page.wait_for_timeout(500)
 
-    raw_text = await page.locator(
-        "body"
-    ).inner_text()
+    if not await is_trash_conversation_page(page):
+        raise RuntimeError( "Proton did not open the requested conversation." )
 
-    return EmailContent(
-        conversation_index=index,
-        raw_text=raw_text,
-    )
+    raw_text = await page.locator(  "body" ).inner_text()
+
+    return EmailContent( conversation_index=index, raw_text=raw_text, )
 async def get_trash_page_information(
     page: Page,
 ) -> TrashPageInformation:
