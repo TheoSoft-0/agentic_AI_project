@@ -1,0 +1,8 @@
+pydantic<3,>=2
+pydantic-ai<3,>=2.44
+playwright<2,>=1.50
+
+[dev]
+pytest<9,>=8
+pytest-asyncio<2,>=1
+ipykernel
