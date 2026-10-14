@@ -29,8 +29,10 @@ PROTON_PROFILE_NAME = "proton"
 
 LOGGED_IN_URL_PATTERN = re.compile(r"^https://mail\.proton\.me/u/\d+/")
 
-TRASH_URL_PATTERN = re.compile( r"^https://mail\.proton\.me/u/\d+/trash(?:\?.*)?$")
 
+TRASH_URL_PATTERN = re.compile(
+    r"^https://mail\.proton\.me/u/\d+/trash(?:[?#].*)?$"
+)
 
 async def open_proton_mail(
     project_root,
@@ -250,25 +252,54 @@ async def ensure_navigation_expanded(
         state="visible"
     )
 
-async def open_trash(
-    page: Page,
-) -> None:
-    """Open Proton Mail Trash."""
+
+async def open_trash(page: Page) -> None:
+    """Navigate directly to Trash for the logged-in Proton account."""
+
     if await is_trash_page(page):
         print("Already on Trash.")
         return
 
-    await ensure_navigation_expanded(page)
-
-    trash_link = page.locator(
-        'a[href$="/trash"]'
+    # Extract the account ID from the current logged-in URL.
+    account_match = re.match(
+        r"^https://mail\.proton\.me/u/(\d+)(?:/|$)",
+        page.url,
     )
 
-    await trash_link.click()
+    if account_match is None:
+        raise RuntimeError(
+            "Cannot determine the Proton account ID from "
+            f"the current URL: {page.url!r}"
+        )
+
+    account_id = account_match.group(1)
+    trash_url = f"https://mail.proton.me/u/{account_id}/trash"
+
+    await page.goto(
+        trash_url,
+        wait_until="domcontentloaded",
+    )
 
     await page.wait_for_url(
-        TRASH_URL_PATTERN
+        TRASH_URL_PATTERN,
+        timeout=15_000,
     )
+
+    # Confirm that the Trash page has loaded its pagination indicator.
+    page_indicator = page.locator("button").filter(
+        has_text=re.compile(r"^\d+/\d+$")
+    )
+
+    await page_indicator.first.wait_for(
+        state="visible",
+        timeout=15_000,
+    )
+
+    if await page_indicator.count() != 1:
+        raise RuntimeError(
+            "Opened Trash, but could not uniquely identify "
+            "its page indicator."
+        )
 
     print("Opened Trash.")
 
@@ -310,67 +341,217 @@ async def return_to_trash( page: Page, ) -> None:
 
     print("Returned to Trash.")
 
-async def open_trash_conversation( page: Page, index: int,) -> EmailContent:
-    """Open a specific Trash conversation."""
+
+async def open_trash_conversation(
+    page: Page,
+    index: int,
+) -> EmailContent:
+    """Open a Trash conversation by its global Trash index."""
 
     if await is_trash_conversation_page(page):
         print("Conversation already open.")
         await return_to_trash(page)
 
     if not await is_trash_page(page):
-        raise RuntimeError( "The current Proton page is not Trash." )
+        raise RuntimeError(
+            "The current Proton page is not Trash."
+        )
 
-    rows = page.locator( "div.item-container--row")
+    if index < 0:
+        raise IndexError(
+            f"Conversation index {index} is invalid."
+        )
+
+    page_indicator = page.locator(
+        'button'
+    ).filter(
+        has_text=re.compile(r"^\d+/\d+$")
+    )
+
+    if await page_indicator.count() != 1:
+        raise RuntimeError(
+            "Could not find the Trash page indicator."
+        )
+
+    page_text = (await page_indicator.inner_text()).strip()
+
+    match = re.fullmatch(r"(\d+)/(\d+)", page_text)
+
+    if match is None:
+        raise RuntimeError(
+            f"Could not parse Trash page indicator: {page_text!r}"
+        )
+
+    current_page = int(match.group(1))
+    page_count = int(match.group(2))
+
+    target_page = (index // 50) + 1
+    row_index = index % 50
+
+    if target_page > page_count:
+        raise IndexError(
+            f"Conversation index {index} is outside "
+            f"the available Trash pages."
+        )
+
+
+    async def wait_for_page(expected_page: int) -> None:
+        for _ in range(50):
+            text = (await page_indicator.inner_text()).strip()
+            match = re.fullmatch(r"(\d+)/(\d+)", text)
+
+            if match is not None:
+                actual_page = int(match.group(1))
+                actual_count = int(match.group(2))
+
+                if actual_page == expected_page:
+                    if actual_count != page_count:
+                        raise RuntimeError(
+                            "Trash page count changed during navigation."
+                        )
+                    return
+
+            await page.wait_for_timeout(100)
+
+        text = (await page_indicator.inner_text()).strip()
+        raise RuntimeError(
+            f"Expected Trash page {expected_page}; "
+            f"indicator remained at {text!r}."
+        )
+
+    while current_page < target_page:
+        next_button = page.get_by_role(
+            "button",
+            name="Next page",
+            exact=True,
+        )
+
+        if await next_button.is_disabled():
+            raise RuntimeError(
+                f"Could not reach Trash page {target_page}."
+            )
+
+        await next_button.click()
+        await wait_for_page(current_page + 1)
+        current_page += 1
+
+    while current_page > target_page:
+        previous_button = page.get_by_role(
+            "button",
+            name="Previous page",
+            exact=True,
+        )
+
+        if await previous_button.is_disabled():
+            raise RuntimeError(
+                f"Could not return to Trash page {target_page}."
+            )
+
+        await previous_button.click()
+        await wait_for_page(current_page - 1)
+        current_page -= 1
+ 
+    rows = page.locator(
+        "div.item-container--row"
+    )
 
     row_count = await rows.count()
 
-    if index < 0 or index >= row_count:
+    if row_index >= row_count:
         raise IndexError(
-            f"Conversation index {index} is invalid. "
-            f"Available rows: 0-{row_count - 1}."
+            f"Conversation index {index} maps to row "
+            f"{row_index}, but page {target_page} only "
+            f"contains {row_count} rows."
         )
 
-    row = rows.nth(index)
+    row = rows.nth(row_index)
 
     if not await row.is_visible():
-        raise RuntimeError(f"Conversation {index} is not visible.")
+        raise RuntimeError(
+            f"Conversation {index} is not visible."
+        )
 
     await row.click()
 
     await page.wait_for_timeout(500)
 
     if not await is_trash_conversation_page(page):
-        raise RuntimeError( "Proton did not open the requested conversation." )
+        raise RuntimeError(
+            "Proton did not open the requested conversation."
+        )
 
-    raw_text = await page.locator(  "body" ).inner_text()
+    raw_text = await page.locator(
+        "body"
+    ).inner_text()
 
-    return EmailContent( conversation_index=index, raw_text=raw_text, )
+    return EmailContent(
+        conversation_index=index,
+        raw_text=raw_text,
+    )
+
 async def get_trash_page_information(
     page: Page,
+    *,
+    page_number: int | None = None,
 ) -> TrashPageInformation:
-    """Return structured information about visible Trash conversations."""
+    """Return structured information about the visible Trash page."""
     if not await is_trash_page(page):
         raise RuntimeError(
             "The current Proton Mail page is not Trash."
         )
 
-    rows = page.locator(
-        "div.item-container--row"
+    page_indicator = page.locator("button").filter(
+        has_text=re.compile(r"^\d+/\d+$")
     )
 
-    conversations: list[
-        RawTrashConversation
-    ] = []
+    if await page_indicator.count() != 1:
+        raise RuntimeError(
+            "Could not find the Trash page indicator."
+        )
 
-    for index in range(await rows.count()):
-        row = rows.nth(index)
+    page_text = (await page_indicator.inner_text()).strip()
+
+    match = re.fullmatch(r"(\d+)/(\d+)", page_text)
+
+    if match is None:
+        raise RuntimeError(
+            f"Could not parse Trash page indicator: {page_text!r}"
+        )
+
+    detected_page_number = int(match.group(1))
+    detected_page_count = int(match.group(2))
+
+    if (
+        page_number is not None
+        and detected_page_number != page_number
+    ):
+        raise RuntimeError(
+            f"Expected Trash page {page_number}, "
+            f"but Proton shows page {detected_page_number}."
+        )
+
+    rows = page.locator("div.item-container--row")
+
+    conversations: list[RawTrashConversation] = []
+
+    row_count = await rows.count()
+
+    for row_index in range(row_count):
+        row = rows.nth(row_index)
 
         if not await row.is_visible():
             continue
 
+        global_index = (
+            (detected_page_number - 1) * 50
+            + row_index
+        )
+
         conversations.append(
             RawTrashConversation(
-                index=index,
+                index=global_index,
+                page_number=detected_page_number,
+                row_index=row_index,
                 raw_text=(
                     await row.inner_text()
                 ).strip(),
@@ -380,6 +561,231 @@ async def get_trash_page_information(
     return TrashPageInformation(
         title=await page.title(),
         url=page.url,
+        page_number=detected_page_number,
+        page_count=detected_page_count,
         conversation_count=len(conversations),
         conversations=conversations,
     )
+
+
+
+async def get_recent_trash_conversations(
+    page: Page,
+    max_pages: int = 2,
+) -> list[RawTrashConversation]:
+    """Collect conversations from the first N Trash pages."""
+
+    if max_pages < 1:
+        raise ValueError("max_pages must be at least 1.")
+
+    if not await is_trash_page(page):
+        raise RuntimeError(
+            "The current Proton Mail page is not Trash."
+        )
+
+    page_indicator = page.locator("button").filter(
+        has_text=re.compile(r"^\d+/\d+$")
+    )
+
+    async def read_page_state() -> tuple[int, int]:
+        if await page_indicator.count() != 1:
+            raise RuntimeError(
+                "Could not find the Trash page indicator."
+            )
+
+        text = (await page_indicator.inner_text()).strip()
+        match = re.fullmatch(r"(\d+)/(\d+)", text)
+
+        if match is None:
+            raise RuntimeError(
+                f"Could not parse Trash page indicator: {text!r}"
+            )
+
+        return int(match.group(1)), int(match.group(2))
+
+    async def wait_for_page(
+        expected_page: int,
+    ) -> tuple[int, int]:
+        # Wait for Proton's displayed page number to change.
+        for _ in range(50):
+            current, total = await read_page_state()
+
+            if current == expected_page:
+                return current, total
+
+            await page.wait_for_timeout(100)
+
+        current, total = await read_page_state()
+        raise RuntimeError(
+            f"Expected Trash page {expected_page}, "
+            f"but Proton shows {current}/{total}."
+        )
+
+    current_page, page_count = await read_page_state()
+
+    # Start at page 1 so global conversation indexes are consistent.
+    while current_page > 1:
+        previous_button = page.get_by_role(
+            "button",
+            name="Previous page",
+            exact=True,
+        )
+
+        if await previous_button.is_disabled():
+            raise RuntimeError(
+                "Could not navigate back to Trash page 1."
+            )
+
+        await previous_button.click()
+        current_page, page_count = await wait_for_page(
+            current_page - 1
+        )
+
+    pages_to_scan = min(max_pages, page_count)
+    conversations: list[RawTrashConversation] = []
+
+    for expected_page in range(1, pages_to_scan + 1):
+        if expected_page > 1:
+            next_button = page.get_by_role(
+                "button",
+                name="Next page",
+                exact=True,
+            )
+
+            if await next_button.is_disabled():
+                raise RuntimeError(
+                    f"Could not navigate to Trash page "
+                    f"{expected_page}."
+                )
+
+            await next_button.click()
+            await wait_for_page(expected_page)
+
+        page_info = await get_trash_page_information(
+            page,
+            page_number=expected_page,
+        )
+        conversations.extend(page_info.conversations)
+
+    return conversations
+
+
+async def get_all_trash_conversations( page: Page, ) -> list[RawTrashConversation]:
+    """Collect conversations from every Trash page."""
+    if not await is_trash_page(page):
+        raise RuntimeError(
+            "The current Proton page is not Trash."
+        )
+
+    page_indicator = page.locator("button").filter(
+        has_text=re.compile(r"^\d+/\d+$")
+    )
+
+    if await page_indicator.count() != 1:
+        raise RuntimeError(
+            "Could not find the Trash page indicator."
+        )
+
+    page_text = (await page_indicator.inner_text()).strip()
+
+    match = re.fullmatch(r"(\d+)/(\d+)", page_text)
+
+    if match is None:
+        raise RuntimeError(
+            f"Could not parse Trash page indicator: {page_text!r}"
+        )
+
+    current_page = int(match.group(1))
+    page_count = int(match.group(2))
+
+    # Always begin collecting from page 1.
+    while current_page > 1:
+        previous_button = page.get_by_role(
+            "button",
+            name="Previous page",
+            exact=True,
+        )
+
+        for _ in range(50):
+            if not await previous_button.is_disabled():
+                break
+
+            await page.wait_for_timeout(100)
+        else:
+            raise RuntimeError(
+                "Previous page remained disabled while "
+                f"trying to return to page {current_page - 1}."
+            )
+
+        await previous_button.click()
+
+        expected_page = current_page - 1
+
+        for _ in range(50):
+            await page.wait_for_timeout(100)
+
+            page_text = (await page_indicator.inner_text()).strip()
+
+            if page_text == f"{expected_page}/{page_count}":
+                break
+        else:
+            raise RuntimeError(
+                f"Proton did not reach Trash page {expected_page}."
+            )
+
+        current_page = expected_page
+
+    conversations: list[RawTrashConversation] = []
+
+    # Collect every page.
+    for expected_page in range(1, page_count + 1):
+        page_information = await get_trash_page_information(
+            page,
+            page_number=expected_page,
+        )
+
+        conversations.extend(
+            page_information.conversations
+        )
+
+        if expected_page == page_count:
+            break
+
+        next_button = page.get_by_role(
+            "button",
+            name="Next page",
+            exact=True,
+        )
+
+        # Proton may temporarily disable the button while
+        # the current page finishes rendering.
+        for _ in range(50):
+            if not await next_button.is_disabled():
+                break
+
+            await page.wait_for_timeout(100)
+        else:
+            raise RuntimeError(
+                f"Next page remained disabled after "
+                f"Trash page {expected_page}."
+            )
+
+        await next_button.click()
+
+        expected_next_page = expected_page + 1
+
+        # Wait for Proton to actually finish the page transition.
+        for _ in range(50):
+            await page.wait_for_timeout(100)
+
+            page_text = (await page_indicator.inner_text()).strip()
+
+            if page_text == f"{expected_next_page}/{page_count}":
+                break
+        else:
+            raise RuntimeError(
+                f"Proton did not reach Trash page "
+                f"{expected_next_page}."
+            )
+
+    return conversations
