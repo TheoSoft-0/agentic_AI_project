@@ -1,8 +1,14 @@
 import re
+import warnings
 from datetime import date
 
-from .models import EmailContent, TrashReviewReport
-
+from .models import (
+    EmailContent,
+    TrashReviewFinding,
+    TrashReviewFindingDraft,
+    TrashReviewReport,
+    TrashReviewReportDraft,
+)
 
 
 _MONTHS = {
@@ -82,66 +88,125 @@ def parse_explicit_event_date(text: str) -> date | None:
 
 
 def validate_trash_review_report(
-    report: TrashReviewReport,
+    report: TrashReviewReportDraft,
     inspected_conversations: dict[int, EmailContent],
     today: date,
 ) -> TrashReviewReport:
-    """Reject review findings that contain unsupported future dates."""
+    """Convert untrusted model output into a validated report.
+
+    Invalid findings are discarded individually. A finding cannot
+    enter the final report unless its evidence and date requirements
+    pass deterministic Python validation.
+    """
+    validated_findings: list[TrashReviewFinding] = []
 
     for finding in report.findings:
-        if finding.category not in {"future_event", "both"}:
-            continue
 
-        if finding.event_date is None:
-            raise ValueError(
-                f"Conversation {finding.conversation_index} is marked "
-                "as a future event but has no event_date."
+        def discard(message: str) -> None:
+            warnings.warn(
+                (
+                    f"Discarding finding for conversation "
+                    f"{finding.conversation_index}: {message}"
+                ),
+                RuntimeWarning,
+                stacklevel=2,
             )
 
-        if finding.event_date_text is None:
-            raise ValueError(
-                f"Conversation {finding.conversation_index} does not "
-                "provide the source date text."
-            )
-
-        if finding.evidence is None:
-            raise ValueError(
-                f"Conversation {finding.conversation_index} does not "
-                "provide evidence."
-            )
-
-        expected_date = parse_explicit_event_date(
-            finding.event_date_text
-        )
-
-        if expected_date != finding.event_date:
-            raise ValueError(
-                f"Conversation {finding.conversation_index}: "
-                f"event_date={finding.event_date} does not match "
-                f"event_date_text={finding.event_date_text!r}."
-            )
-
-        if finding.event_date <= today:
-            raise ValueError(
-                f"Conversation {finding.conversation_index}: "
-                f"event date {finding.event_date} is not in the future."
-            )
-
+        # Every reported conversation must have been inspected.
         conversation = inspected_conversations.get(
             finding.conversation_index
         )
 
         if conversation is None:
-            raise ValueError(
-                f"Conversation {finding.conversation_index} was "
-                "reported but was never inspected."
-            )
+            discard("conversation was never inspected.")
+            continue
 
+        # Evidence must be an exact substring of the inspected email.
         if finding.evidence not in conversation.raw_text:
-            raise ValueError(
-                f"Conversation {finding.conversation_index}: "
-                "reported evidence does not exist in the inspected "
-                "email content."
+            discard("evidence is not present in the inspected email.")
+            continue
+
+        validated_event_date: date | None = None
+        validated_event_date_text: str | None = None
+
+        if finding.category in {"future_event", "both"}:
+            event_date_text = (
+                finding.event_date_text.strip()
+                if finding.event_date_text
+                else ""
             )
 
-    return report
+            event_date_value = (
+                finding.event_date.strip()
+                if finding.event_date
+                else ""
+            )
+
+            if not event_date_text:
+                discard("event_date_text is missing.")
+                continue
+
+            if not event_date_value:
+                discard("event_date is missing.")
+                continue
+
+            # Require the date text to appear within the cited evidence.
+            if event_date_text not in finding.evidence:
+                discard(
+                    "event_date_text is not contained in the evidence."
+                )
+                continue
+
+            # Parse the actual date supported by the source text.
+            expected_date = parse_explicit_event_date(event_date_text)
+
+            if expected_date is None:
+                discard(
+                    "event_date_text does not contain one valid, "
+                    "explicit day-month-year date."
+                )
+                continue
+
+            # The model must provide event_date in ISO YYYY-MM-DD format.
+            try:
+                model_date = date.fromisoformat(event_date_value)
+            except ValueError:
+                discard(
+                    "event_date must use ISO YYYY-MM-DD format."
+                )
+                continue
+
+            if model_date.isoformat() != event_date_value:
+                discard(
+                    "event_date must use ISO YYYY-MM-DD format."
+                )
+                continue
+
+            # The normalized model date must agree with the source text.
+            if model_date != expected_date:
+                discard(
+                    "event_date does not match event_date_text."
+                )
+                continue
+
+            # Events today or in the past do not qualify.
+            if model_date <= today:
+                discard("event date is not in the future.")
+                continue
+
+            validated_event_date = model_date
+            validated_event_date_text = event_date_text
+
+        # Create the strict finding only after its checks have passed.
+        validated_findings.append(
+            TrashReviewFinding(
+                conversation_index=finding.conversation_index,
+                category=finding.category,
+                event_date=validated_event_date,
+                event_date_text=validated_event_date_text,
+                evidence=finding.evidence,
+                reason=finding.reason,
+            )
+        )
+
+    return TrashReviewReport(findings=validated_findings)
