@@ -6,19 +6,20 @@ from playwright.async_api         import Page
 from datetime                     import date
 
 from .models import (
-    EmailContent,
-    EmailImportance,
     TrashCandidateSelection,
+    TrashReviewReportDraft,
     TrashPageInformation,
     TrashReviewReport,
+    EmailImportance,
+    EmailContent,
 )
 from .proton import (
     get_trash_page_information,
+    open_trash_conversation,
+    star_conversation,
+    return_to_trash,
     is_trash_page,
     open_trash,
-    open_trash_conversation,
-    return_to_trash,
-    star_conversation,
 )
 
 
@@ -142,7 +143,7 @@ def create_trash_review_agent() -> Agent:
     """Create the agent that analyzes already-inspected conversations."""
     return Agent(
         create_local_model(),
-        output_type=TrashReviewReport,
+        output_type=TrashReviewReportDraft,
         model_settings={"temperature": 0.0},
         instructions="""
 You analyze already-inspected Proton Mail Trash conversations.
@@ -170,6 +171,21 @@ Important rules:
   inspected conversation.
 - Never invent evidence.
 
+For category "unusual":
+
+- Compare the inspected conversation with the Trash overview
+  supplied in the user prompt.
+- Identify the specific surrounding pattern and the meaningful
+  deviation from that pattern.
+- A different subject or generic message type alone is insufficient.
+  Explain why the deviation makes this conversation worth checking.
+- Do not claim a pattern that is not supported by the overview.
+- Do not contradict yourself in the reason.
+- If the available context does not establish a meaningful
+  deviation, do not create an unusual finding.
+- The overview is for comparison only. Finding evidence must come
+  from the inspected conversation.
+
 For category "future_event":
 
 - event_date is required.
@@ -181,6 +197,18 @@ For category "future_event":
   application round numbers, job codes, filenames, or IDs.
 - If there is no unambiguous future event date, do not create
   a "future_event" finding.
+- A valid event date must specify a day, month, and year.
+- A month and year alone, such as "August 2027", is insufficient.
+- Never invent a day to turn a month and year into a full date.
+- Never convert "August 2027" to "2027-08-01".
+- If the inspected email does not establish a specific calendar
+  date, do not create a future_event finding.
+- A valid event date must specify a day, month, and year.
+- A month and year alone, such as "August 2027", is insufficient.
+- Never invent a day to turn a month and year into a full date.
+- Never convert "August 2027" to "2027-08-01".
+- If the inspected email does not establish a specific calendar
+  date, do not create a future_event finding.
 
 For category "both":
 

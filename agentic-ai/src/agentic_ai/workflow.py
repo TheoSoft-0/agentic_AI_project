@@ -193,9 +193,36 @@ Trash overview:
     candidate_indexes = list(dict.fromkeys(candidate_indexes))
 
     if len(candidate_indexes) > 5:
-        raise RuntimeError(
-            "Candidate selection exceeded the five-candidate limit."
+        raise RuntimeError( "Candidate selection exceeded the five-candidate limit." )
+
+    # Build compact comparison context around the selected candidates.
+    # Use list positions rather than assuming indexes are consecutive.
+    conversation_positions = {
+        conversation.index: position
+        for position, conversation in enumerate(conversations)
+    }
+
+    context_positions: set[int] = set()
+
+    for candidate_index in candidate_indexes:
+        candidate_position = conversation_positions[candidate_index]
+
+        # Include up to two rows before and two rows after each candidate.
+        context_positions.update(
+            range(
+                max(0, candidate_position - 2),
+                min(len(conversations), candidate_position + 3),
+            )
         )
+
+    comparison_text = "\n".join(
+        (
+            f"Index {conversations[position].index}: "
+            f"{conversations[position].raw_text[:80]}"
+        )
+        for position in sorted(context_positions)
+    )
+
 
     # 3. Enforce the inspection budget in Python.
     deps = ProtonAgentDeps(
@@ -244,32 +271,59 @@ Review these selected Proton Mail Trash conversations.
 
 Today's date is {analysis_date.isoformat()}.
 
-Identify only conversations that actually need human checking.
+Your task is to identify only conversations that genuinely need
+human checking.
 
-A conversation needs checking when it:
-- meaningfully deviates from the surrounding messages, OR
-- contains an actual meeting, event, invitation, appointment,
-  deadline, or similar event whose date is strictly after today.
+A conversation qualifies if:
+1. It meaningfully deviates from the surrounding Trash messages, OR
+2. It contains an actual future event with an explicit,
+   unambiguous calendar date strictly after today.
+
+For the unusual category:
+- Compare each inspected conversation with the Trash overview below.
+- Identify the specific pattern in the surrounding messages and
+  explain how the inspected conversation meaningfully differs.
+- A different subject or generic message type alone is not enough.
+  Explain why the difference makes this conversation worth checking.
+- Do not claim a surrounding pattern unless the overview supports it.
+- If no meaningful deviation can be established, omit the finding.
+- Do not contradict yourself in the explanation.
 
 For future events:
-- An event dated today does NOT count.
-- An event dated before today does NOT count.
+- Events dated today or earlier do NOT qualify.
 - The received email date is not an event date.
+- Dates in email headers, including weekday/timestamp combinations,
+  must not be treated as event dates.
 - Do not infer dates from ambiguous values such as "25/26".
 - event_date and event_date_text are required for future_event
   and both findings.
+- event_date must be a string in ISO YYYY-MM-DD format.
+- event_date_text must be an exact substring of evidence.
+- Evidence must be an exact substring of the inspected conversation.
+- A month and year alone, such as "August 2027", is insufficient.
+- Never invent a day to complete an incomplete date.
+- Do not include a future_event or both finding without a valid,
+  explicit date and supporting evidence.
+
+Evidence rules:
 - Evidence must be an exact excerpt from the inspected conversation.
+- Never invent evidence, event dates, or surrounding-message patterns.
+- The Trash overview provides comparison context only.
+  It must not be used as evidence for a finding.
+- Do not assume that a candidate actually needs review.
+- If neither criterion is met, omit that conversation.
 
-Do not assume a candidate actually needs review.
-Reject candidates that do not meet the criteria.
-Do not invent evidence or event dates.
+Nearby Trash comparison context
+(short previews of rows around selected candidates):
+{comparison_text}
 
-Inspected conversations:
+Inspected conversations
+(full or bounded excerpts; use these as the source of evidence):
 {inspected_text}
 """,
         usage_limits=UsageLimits(
             request_limit=2,
-            input_tokens_limit=7_000,
+            input_tokens_limit=10_000,
             output_tokens_limit=1_200,
         ),
     )
