@@ -288,6 +288,21 @@ For the unusual category:
 - Do not claim a surrounding pattern unless the overview supports it.
 - If no meaningful deviation can be established, omit the finding.
 - Do not contradict yourself in the explanation.
+- Treat routine variations in metadata as normal, not unusual.
+- For job application confirmations, differences in job title,
+  employer name, job level, or wording do not by themselves
+  constitute a meaningful deviation.
+- A message confirming receipt of an application remains a
+  routine confirmation even when it names a specific role.
+- Look for a meaningful difference in the message's purpose,
+  status, requested action, or substantive content.
+- Examples that may warrant checking include a rejection,
+  an assessment invitation, a request for additional documents,
+  a concrete deadline, or unexpected or conflicting instructions.
+- Do not claim that a message has extra relevance or intent
+  unless its content supports that conclusion.
+- The reason must explain why the difference matters, not
+  merely describe how the subject differs.
 
 For future events:
 - Events dated today or earlier do NOT qualify.
