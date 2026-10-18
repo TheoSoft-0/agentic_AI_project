@@ -85,7 +85,19 @@ def parse_explicit_event_date(text: str) -> date | None:
     return unique_matches.pop()
 
 
+def normalize_whitespace(text: str) -> str:
+    """Normalize whitespace without changing the words or their order."""
+    return " ".join(text.split())
 
+def evidence_is_supported(evidence: str, source_text: str) -> bool:
+    """Check that evidence appears in the source, ignoring whitespace differences."""
+    normalized_evidence = normalize_whitespace(evidence)
+    normalized_source = normalize_whitespace(source_text)
+
+    return (
+        bool(normalized_evidence)
+        and normalized_evidence in normalized_source
+    ) 
 
 def validate_trash_review_report(
     report: TrashReviewReportDraft,
@@ -122,7 +134,7 @@ def validate_trash_review_report(
             continue
 
         # Evidence must be an exact substring of the inspected email.
-        if finding.evidence not in conversation.raw_text:
+        if not evidence_is_supported(finding.evidence, conversation.raw_text):
             discard("evidence is not present in the inspected email.")
             continue
 
@@ -151,7 +163,7 @@ def validate_trash_review_report(
                 continue
 
             # Require the date text to appear within the cited evidence.
-            if event_date_text not in finding.evidence:
+            if not evidence_is_supported(event_date_text, finding.evidence):
                 discard(
                     "event_date_text is not contained in the evidence."
                 )

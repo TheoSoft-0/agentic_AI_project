@@ -90,3 +90,42 @@ class TrashReviewReportDraft(BaseModel):
     """Raw report returned by the LLM."""
 
     findings: list[TrashReviewFindingDraft]
+    
+    
+TrashMessagePurpose = Literal[
+    "routine_application_admin",
+    "action_required",
+    "event_information",
+    "meeting_or_appointment",
+    "other",
+]
+
+
+class TrashContextPurposeDraft(BaseModel):
+    """Model's classification of one surrounding Trash conversation."""
+
+    conversation_index: int
+    purpose: TrashMessagePurpose
+
+
+class TrashConversationAssessmentDraft(BaseModel):
+    """Structured assessment of one inspected conversation."""
+
+    conversation_index: int
+    purpose: TrashMessagePurpose
+
+    # Classifications of all visible surrounding conversations.
+    # The inspected conversation itself must not appear in this list.
+    context_classifications: list[TrashContextPurposeDraft]
+
+    # Verbatim excerpt supporting a potential finding.
+    evidence: str | None = None
+
+    # A complete, explicit date for an actual future event or deadline.
+    event_date_text: str | None = None
+
+
+class TrashReviewAssessmentReportDraft(BaseModel):
+    """Untrusted structured classifications returned by the model."""
+
+    assessments: list[TrashConversationAssessmentDraft]

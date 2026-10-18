@@ -11,10 +11,12 @@ from .agent import (
 )
 from .candidate_selection import validate_candidate_selection
 from .models import (
-    EmailContent,
+    TrashReviewAssessmentReportDraft,
     TrashPageInformation,
     TrashReviewReport,
+    EmailContent,
 )
+from .review_decision import assessment_report_to_review_draft
 from .proton import (
     get_recent_trash_conversations,
     open_trash_conversation,
@@ -195,35 +197,53 @@ Trash overview:
     if len(candidate_indexes) > 5:
         raise RuntimeError( "Candidate selection exceeded the five-candidate limit." )
 
-    # Build compact comparison context around the selected candidates.
-    # Use list positions rather than assuming indexes are consecutive.
+    # Build a separate comparison context for each candidate.
+    # This prevents messages near one candidate from becoming context
+    # for an unrelated candidate elsewhere in the Trash list.
+
     conversation_positions = {
         conversation.index: position
         for position, conversation in enumerate(conversations)
     }
 
-    context_positions: set[int] = set()
+    context_indexes_by_candidate: dict[int, set[int]] = {}
+    comparison_blocks: list[str] = []
 
     for candidate_index in candidate_indexes:
         candidate_position = conversation_positions[candidate_index]
 
-        # Include up to two rows before and two rows after each candidate.
-        context_positions.update(
-            range(
+        nearby_conversations = [
+            conversations[position]
+            for position in range(
                 max(0, candidate_position - 2),
                 min(len(conversations), candidate_position + 3),
             )
+            if conversations[position].index != candidate_index
+        ]
+
+        context_indexes_by_candidate[candidate_index] = {
+            conversation.index
+            for conversation in nearby_conversations
+        }
+
+        context_lines = "\n".join(
+            (
+                f"Index {conversation.index}: "
+                f"{conversation.raw_text[:180]}"
+            )
+            for conversation in nearby_conversations
         )
 
-    comparison_text = "\n".join(
-        (
-            f"Index {conversations[position].index}: "
-            f"{conversations[position].raw_text[:80]}"
+        if not context_lines:
+            context_lines = "(No surrounding conversations available.)"
+
+        comparison_blocks.append(
+            f"TARGET CONVERSATION INDEX {candidate_index}\n"
+            f"{context_lines}"
         )
-        for position in sorted(context_positions)
-    )
 
-
+    comparison_text = "\n\n".join(comparison_blocks)
+    #
     # 3. Enforce the inspection budget in Python.
     deps = ProtonAgentDeps(
         page=page,
@@ -267,75 +287,28 @@ Trash overview:
 
     result = await review_agent.run(
         f"""
-Review these selected Proton Mail Trash conversations.
+        Assess the inspected Proton Mail Trash conversations.
 
-Today's date is {analysis_date.isoformat()}.
+        Today's date is {analysis_date.isoformat()}.
 
-Your task is to identify only conversations that genuinely need
-human checking.
+        Return one structured assessment for each inspected conversation.
 
-A conversation qualifies if:
-1. It meaningfully deviates from the surrounding Trash messages, OR
-2. It contains an actual future event with an explicit,
-   unambiguous calendar date strictly after today.
+        For every target:
+        - Classify its purpose using the purpose categories in your instructions.
+        - Classify every surrounding index in that target's own context block.
+        - Do not include the target index in its context classifications.
+        - Use evidence from the inspected email, never from the overview.
+        - Supply event_date_text only for a genuine future event, meeting,
+        appointment, or deadline with an explicit full date.
+        - Do not use email-header timestamps or dates inferred from names.
+        - Do not create findings; Python will apply the decision rules.
 
-For the unusual category:
-- Compare each inspected conversation with the Trash overview below.
-- Identify the specific pattern in the surrounding messages and
-  explain how the inspected conversation meaningfully differs.
-- A different subject or generic message type alone is not enough.
-  Explain why the difference makes this conversation worth checking.
-- Do not claim a surrounding pattern unless the overview supports it.
-- If no meaningful deviation can be established, omit the finding.
-- Do not contradict yourself in the explanation.
-- Treat routine variations in metadata as normal, not unusual.
-- For job application confirmations, differences in job title,
-  employer name, job level, or wording do not by themselves
-  constitute a meaningful deviation.
-- A message confirming receipt of an application remains a
-  routine confirmation even when it names a specific role.
-- Look for a meaningful difference in the message's purpose,
-  status, requested action, or substantive content.
-- Examples that may warrant checking include a rejection,
-  an assessment invitation, a request for additional documents,
-  a concrete deadline, or unexpected or conflicting instructions.
-- Do not claim that a message has extra relevance or intent
-  unless its content supports that conclusion.
-- The reason must explain why the difference matters, not
-  merely describe how the subject differs.
+        Nearby Trash comparison contexts, grouped by target:
+        {comparison_text}
 
-For future events:
-- Events dated today or earlier do NOT qualify.
-- The received email date is not an event date.
-- Dates in email headers, including weekday/timestamp combinations,
-  must not be treated as event dates.
-- Do not infer dates from ambiguous values such as "25/26".
-- event_date and event_date_text are required for future_event
-  and both findings.
-- event_date must be a string in ISO YYYY-MM-DD format.
-- event_date_text must be an exact substring of evidence.
-- Evidence must be an exact substring of the inspected conversation.
-- A month and year alone, such as "August 2027", is insufficient.
-- Never invent a day to complete an incomplete date.
-- Do not include a future_event or both finding without a valid,
-  explicit date and supporting evidence.
-
-Evidence rules:
-- Evidence must be an exact excerpt from the inspected conversation.
-- Never invent evidence, event dates, or surrounding-message patterns.
-- The Trash overview provides comparison context only.
-  It must not be used as evidence for a finding.
-- Do not assume that a candidate actually needs review.
-- If neither criterion is met, omit that conversation.
-
-Nearby Trash comparison context
-(short previews of rows around selected candidates):
-{comparison_text}
-
-Inspected conversations
-(full or bounded excerpts; use these as the source of evidence):
-{inspected_text}
-""",
+        Inspected conversations:
+        {inspected_text}
+        """,
         usage_limits=UsageLimits(
             request_limit=2,
             input_tokens_limit=10_000,
@@ -343,9 +316,18 @@ Inspected conversations
         ),
     )
 
-    # 5. Validate the report deterministically in Python.
-    validated_report = validate_trash_review_report(
+  
+    # 5. Convert classifications into a review-report draft using Python.
+    review_draft = assessment_report_to_review_draft(
         result.output,
+        deps.inspected_conversations,
+        context_indexes_by_candidate,
+        deps.today,
+    )
+
+    # 6. Validate the generated report using the existing safety checks.
+    validated_report = validate_trash_review_report(
+        review_draft,
         deps.inspected_conversations,
         deps.today,
     )

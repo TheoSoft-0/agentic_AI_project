@@ -6,6 +6,7 @@ from playwright.async_api         import Page
 from datetime                     import date
 
 from .models import (
+    TrashReviewAssessmentReportDraft,
     TrashCandidateSelection,
     TrashReviewReportDraft,
     TrashPageInformation,
@@ -140,98 +141,86 @@ You must:
 
 
 def create_trash_review_agent() -> Agent:
-    """Create the agent that analyzes already-inspected conversations."""
+    """Create the agent that classifies inspected Trash conversations."""
+
     return Agent(
         create_local_model(),
-        output_type=TrashReviewReportDraft,
+        output_type=TrashReviewAssessmentReportDraft,
         model_settings={"temperature": 0.0},
         instructions="""
-You analyze already-inspected Proton Mail Trash conversations.
+You classify already-inspected Proton Mail Trash conversations.
 
-Your task is to identify which conversations actually need
-human checking.
+Your output is a structured assessment, not a final review report.
+Python will decide whether a finding should be emitted.
 
-A conversation needs checking when:
+PURPOSE CATEGORIES
 
-1. It meaningfully deviates from the surrounding conversations.
+Use exactly these categories:
 
-OR
+- routine_application_admin:
+  Routine application receipt confirmations, rejections,
+  and ordinary application status updates.
 
-2. It contains an actual meeting, event, invitation,
-   appointment, deadline, or similar future event.
+- action_required:
+  Requests for documents, technical assessments, uploads,
+  or other concrete actions the recipient must take.
 
-Important rules:
+- event_information:
+  Conference and webinar announcements, event promotions,
+  and follow-ups about events.
 
-- Only analyze the conversations supplied in the user prompt.
-- Do not use browser tools.
-- Do not request more conversations.
-- Every finding must represent a conversation that actually
-  needs review.
-- evidence is required and must be an exact excerpt from the
-  inspected conversation.
-- Never invent evidence.
+- meeting_or_appointment:
+  Interviews, meetings, appointments, and scheduling messages.
 
-For category "unusual":
+- other:
+  Messages that do not fit the categories above.
 
-- Treat routine variations in metadata as normal, not unusual.
-- For job application confirmations, differences in job title,
-  employer name, job level, or wording do not by themselves
-  constitute a meaningful deviation.
-- A message confirming receipt of an application remains a
-  routine confirmation even when it names a specific role.
-- Look for a meaningful difference in the message's purpose,
-  status, requested action, or substantive content.
-- Examples that may warrant checking include a rejection,
-  an assessment invitation, a request for additional documents,
-  a concrete deadline, or unexpected or conflicting instructions.
-- Do not claim that a message has extra relevance or intent
-  unless its content supports that conclusion.
-- The reason must explain why the difference matters, not
-  merely describe how the subject differs.
-- Compare the inspected conversation with the Trash overview
-  supplied in the user prompt.
-- Identify the specific surrounding pattern and the meaningful
-  deviation from that pattern.
-- A different subject or generic message type alone is insufficient.
-  Explain why the deviation makes this conversation worth checking.
-- Do not claim a pattern that is not supported by the overview.
-- Do not contradict yourself in the reason.
-- If the available context does not establish a meaningful
-  deviation, do not create an unusual finding.
-- The overview is for comparison only. Finding evidence must come
-  from the inspected conversation.
+CLASSIFICATION RULES
 
-For category "future_event":
+1. Classify every inspected conversation using its actual content.
+2. For each inspected conversation, classify every surrounding
+   conversation listed in that target's context block.
+3. Return exactly one context classification for each listed
+   surrounding conversation index.
+4. Never include the inspected conversation's own index in its
+   context_classifications.
+5. Use only indices present in the supplied context.
+6. Do not infer unseen email content.
+7. A difference in job title, employer, wording, or tone does not
+   change a routine application message into an unusual message.
+8. A different message purpose can be meaningful, but Python will
+   decide whether the purpose differs from the surrounding pattern.
+9. Do not invent evidence or dates.
 
-- event_date is required.
-- event_date_text is required.
-- event_date_text must contain an explicit calendar date.
-- event_date must be the normalized version of event_date_text.
-- The received date of an email is not an event date.
-- Never infer a date from values such as "25/26", "25-26",
-  application round numbers, job codes, filenames, or IDs.
-- If there is no unambiguous future event date, do not create
-  a "future_event" finding.
-- A valid event date must specify a day, month, and year.
-- A month and year alone, such as "August 2027", is insufficient.
-- Never invent a day to turn a month and year into a full date.
-- Never convert "August 2027" to "2027-08-01".
-- If the inspected email does not establish a specific calendar
-  date, do not create a future_event finding.
-- A valid event date must specify a day, month, and year.
-- A month and year alone, such as "August 2027", is insufficient.
-- Never invent a day to turn a month and year into a full date.
-- Never convert "August 2027" to "2027-08-01".
-- If the inspected email does not establish a specific calendar
-  date, do not create a future_event finding.
+EVIDENCE RULES
 
-For category "both":
+- Evidence must be a verbatim excerpt from the inspected email.
+- Choose one continuous excerpt rather than combining separate
+  parts of the email.
+- Do not invent evidence.
+- If event_date_text is supplied, it must be the complete,
+  explicit event date and must appear verbatim in evidence.
+- Do not use a received timestamp or other email-header date as
+  an event date.
+- A year in a subject, product name, or event name is not enough
+  to establish an event date.
+- A month and year without a specific day is not a complete date.
+- Never invent a day to complete an incomplete date.
+- Populate event_date_text only when the email explicitly gives
+  a complete date for an actual meeting, event, appointment,
+  or deadline that is in the future relative to today's date.
+- If no such date exists, leave event_date_text empty.
 
-- The same future-event requirements apply.
+OUTPUT RULES
 
-Return only conversations that actually need checking.
+- Return one assessment for each inspected conversation.
+- Use the supplied conversation index.
+- Classify every surrounding index shown for that conversation.
+- Do not decide which conversations should appear in the final
+  report. Python applies that decision after your assessment.
 """,
     )
+
 
 def create_candidate_selection_agent() -> Agent:
     """Create the agent that selects Trash conversations for inspection."""

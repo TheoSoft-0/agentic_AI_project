@@ -11,6 +11,29 @@ from agentic_ai.review_validation import (
     validate_trash_review_report,
 )
 
+from agentic_ai.review_validation import evidence_is_supported
+
+
+def test_evidence_allows_newline_differences() -> None:
+    source = "First sentence.\nSecond sentence."
+    evidence = "First sentence. Second sentence."
+
+    assert evidence_is_supported(evidence, source)
+
+
+def test_evidence_rejects_paraphrased_text() -> None:
+    source = "Please upload your degree certificate."
+    evidence = "Please submit your diploma."
+
+    assert not evidence_is_supported(evidence, source)
+
+
+def test_evidence_rejects_empty_text() -> None:
+    source = "Please upload your degree certificate."
+
+    assert not evidence_is_supported("", source)
+    assert not evidence_is_supported("   ", source)
+
 def test_discards_future_event_without_date():
     draft = TrashReviewReportDraft(
         findings=[
@@ -179,7 +202,38 @@ def test_ambiguous_date_is_rejected():
 
     assert result.findings == []
 
+def test_evidence_with_line_wrapping_is_accepted():
+    draft = TrashReviewReportDraft(
+        findings=[
+            TrashReviewFindingDraft(
+                conversation_index=7,
+                category="future_event",
+                event_date="2027-08-15",
+                event_date_text="August 15, 2027",
+                evidence=(
+                    "The meeting will take place on\n"
+                    "August 15, 2027."
+                ),
+                reason="The message specifies a future meeting date.",
+            )
+        ]
+    )
 
+    inspected = {
+        7: EmailContent(
+            conversation_index=7,
+            raw_text="The meeting will take place on August 15, 2027.",
+        )
+    }
+
+    report = validate_trash_review_report(
+        draft,
+        inspected,
+        date(2026, 10, 17),
+    )
+
+    assert len(report.findings) == 1
+    assert report.findings[0].event_date == date(2027, 8, 15)
       
 def test_event_today_is_rejected():
     draft = TrashReviewReportDraft(
