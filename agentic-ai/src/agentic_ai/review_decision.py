@@ -171,7 +171,6 @@ def assessment_report_to_review_draft(
             and event_date_text in evidence
             and evidence_is_supported(event_date_text, evidence)
         )
-
         if not is_unusual and not is_future_event:
             continue
 

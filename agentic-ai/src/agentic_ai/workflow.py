@@ -273,7 +273,6 @@ Trash overview:
         # Return to Trash before opening the next conversation.
         await return_to_trash(page)
 
-
     # 4. Perform one final semantic review.
     inspected_text = "\n\n".join(
     (
@@ -281,7 +280,7 @@ Trash overview:
         f"{make_review_excerpt(content.raw_text)}"
     )
     for content in inspected_conversations
-)
+    )
 
     review_agent = create_trash_review_agent()
 
@@ -316,7 +315,6 @@ Trash overview:
         ),
     )
 
-  
     # 5. Convert classifications into a review-report draft using Python.
     review_draft = assessment_report_to_review_draft(
         result.output,

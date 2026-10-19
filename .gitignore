@@ -1,10 +1,29 @@
-./agentic-ai/browser_profile/
-./agentic-ai/browser_profile/
-./agentic-ai/__pycache__/
-./agentic-ai/ipynb_checkpoints/
-./agentic-ai/DS_Store
-.browser_profile/
+# Python bytecode and caches
 __pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+.venv/
+venv/
+
+# Test coverage (conda activate agentic-ai    )
+.coverage
+htmlcov/
+
+# Local secrets and environment configuration
+.env
+.env.*
+!.env.example
+
+# Local browser profiles and authentication sessions
+.browser_profile/
+browser_profile/
+
+# Jupyter checkpoints
 .ipynb_checkpoints/
+
+# macOS metadata
 .DS_Store
-./agentic-ai/src
