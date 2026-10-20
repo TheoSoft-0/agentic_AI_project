@@ -54,6 +54,20 @@ class ProtonAgentDeps:
     allow_writes:    bool = False
     inspected_conversations: dict[int, EmailContent] = field( default_factory=dict )
 
+def validate_write_permission(
+    deps: ProtonAgentDeps,
+    index: int,
+) -> None:
+    """Reject writes unless enabled and the conversation was inspected."""
+    if not deps.allow_writes:
+        raise RuntimeError("Write actions are disabled for this agent run.")
+
+    if index not in deps.inspected_conversations:
+        raise RuntimeError(
+            "Cannot star a conversation that has not been "
+            "inspected during this run."
+        )
+
 def consume_tool_call_budget(deps: ProtonAgentDeps,) -> None:
     """Reserve one agent tool call."""
     if deps.tool_calls_used >= deps.max_tool_calls:
@@ -113,10 +127,9 @@ You must:
                 "The browser is not currently on Trash."
             )
 
-        return await open_trash_conversation(
-            ctx.deps.page,
-            index=index,
-        )
+        content = await open_trash_conversation(ctx.deps.page, index=index, )
+        ctx.deps.inspected_conversations[index] = content
+        return content
 
     @agent.tool
     async def mark_conversation_important(
@@ -124,18 +137,9 @@ You must:
         index: int,
     ) -> str:
         """Star a Trash conversation after the agent decides it is important."""
-        if not ctx.deps.allow_writes:
-            raise RuntimeError(
-                "Write actions are disabled for this agent run."
-            )
-
-        await star_conversation(
-            ctx.deps.page,
-            index=index,
-        )
-
+        validate_write_permission(ctx.deps, index)
+        await star_conversation( ctx.deps.page, index=index, )
         return f"Conversation {index} was successfully starred."
-
     return agent
 
 

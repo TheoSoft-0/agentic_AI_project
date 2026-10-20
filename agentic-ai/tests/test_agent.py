@@ -4,11 +4,51 @@ from agentic_ai.agent import (
     ProtonAgentDeps,
     consume_inspection_budget,
     consume_tool_call_budget,
+    validate_write_permission,
 )
 
 from agentic_ai.models import TrashReviewFinding
 
+def test_write_permission_rejects_when_writes_are_disabled():
+    deps = ProtonAgentDeps(
+        page=None,
+        today=date(2026, 10, 20),
+        allow_writes=False,
+    )
 
+    with pytest.raises(
+        RuntimeError,
+        match="Write actions are disabled",
+    ):
+        validate_write_permission(deps, index=7)
+
+
+def test_write_permission_rejects_uninspected_conversation():
+    deps = ProtonAgentDeps(
+        page=None,
+        today=date(2026, 10, 20),
+        allow_writes=True,
+    )
+
+    with pytest.raises(
+        RuntimeError,
+        match="has not been inspected",
+    ):
+        validate_write_permission(deps, index=7)
+
+
+def test_write_permission_allows_inspected_conversation():
+    from unittest.mock import MagicMock
+
+    deps = ProtonAgentDeps(
+        page=None,
+        today=date(2026, 10, 20),
+        allow_writes=True,
+    )
+    deps.inspected_conversations[7] = MagicMock()
+
+    # No exception means the safety checks permit the action.
+    validate_write_permission(deps, index=7)
 def test_trash_review_finding_represents_a_review_item():
     finding = TrashReviewFinding(
         conversation_index=7,
